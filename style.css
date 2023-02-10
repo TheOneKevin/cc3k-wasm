@@ -5,7 +5,7 @@
 .canvas-wrapper {
     position: relative;
     width: 100%;
-    height: 80vmin;
+    height: var(--playsize, 80vmin);
     margin-bottom: 10px;
     border: 2px solid white;
 }
@@ -22,7 +22,7 @@
     top: 50%;
     left: 50%;
     transform: translate(-50%, -50%);
-    width: 80vmin;
+    width: var(--playsize, 80vmin);
 }
 .input-container {
     display: inline-flex;
@@ -42,14 +42,15 @@
     background: black;
     border: 2px solid;
     width: 100%;
-    font-size: 1.0em;
-    padding-left: 0.1em;
+    font-size: 0.8em;
+    padding: 5px;
 }
 .input-container > button {
     background: none;
     border: 2px solid;
     transition: transform .2s;
     margin-right: -4px;
+    margin-left: 10px;
 }
 .input-container > button:hover {
     transform: scale(1.05);

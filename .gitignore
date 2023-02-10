@@ -2,3 +2,5 @@
 assets/*/
 cc3k.js
 cc3k.wasm
+*.zip
+itchio/
