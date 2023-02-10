@@ -1,0 +1,4 @@
+.vscode/settings.json
+assets/*/
+cc3k.js
+cc3k.wasm

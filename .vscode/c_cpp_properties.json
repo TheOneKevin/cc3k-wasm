@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "name": "Linux",
+            "includePath": [
+                "${workspaceFolder}/**",
+                "${workspaceFolder}/cc3k/src",
+                "${env:EMSDK}/upstream/emscripten/system/include"
+            ],
+            "cppStandard": "c++20"
+        }
+    ],
+    "version": 4
+}

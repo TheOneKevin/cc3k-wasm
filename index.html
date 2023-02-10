@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <link rel="preload" href="assets/monogram.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="stylesheet" href="style.css">
+    <title>CC3k+</title>
+</head>
+
+<body>
+    <div class="game-container">
+        <div class="canvas-wrapper">
+            <canvas style='z-index: 102;' id="text-canvas"></canvas>
+            <canvas style='z-index: 101;' id="animation-canvas"></canvas>
+            <canvas style='z-index: 100;' id="bg-canvas"></canvas>
+        </div>
+        <form onsubmit="return false">
+            <div class="input-container">
+                <div class="textbox-container">
+                    <input id="game-input" type="text" title="Enter a command" placeholder="Enter a command"
+                        disabled="true" onkeypress="input_keypress()" autofocus />
+                </div>
+                <button id="game-button" type="submit" onclick="input_submit()" disabled="true">Enter</button>
+            </div>
+        </form>
+    </div>
+    <script src="index.js"></script>
+    <script>
+        var Module = {
+            onRuntimeInitialized: async function () {
+                window.cc3kctx = new Module.WasmContext(0)
+                const tilemaps = await load_tilemaps()
+                window.tilemaps = Object.assign({}, ...tilemaps)
+                init_canvas()
+                start_game()
+                render_to_canvas()
+                generate_command_map()
+                setup_animations()
+                document.getElementById('game-input').disabled = false
+                document.getElementById('game-button').disabled = false
+                document.getElementById('game-input').focus()
+            }
+        };
+    </script>
+    <script src="cc3k.js"></script>
+</body>
+
+</html>
