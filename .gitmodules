@@ -1,0 +1,3 @@
+[submodule "cc3k"]
+	path = cc3k
+	url = https://git.uwaterloo.ca/k22dai/cc3k.git
