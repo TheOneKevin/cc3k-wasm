@@ -33,7 +33,7 @@ OPTIONS = \
 	-Wno-unqualified-std-cast-call \
 	-Os \
 	--closure 1 \
-	-flto \
+	-flto
 
 cc3k.js cc3k.wasm: ${SOURCES}
 	emcc ${OPTIONS} ${SOURCES} -o cc3k.js
