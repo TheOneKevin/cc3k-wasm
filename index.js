@@ -7,6 +7,29 @@
 const canvas_width = 7
 const canvas_height = 7
 
+window.cc3kdata = {
+    cc3kctx: undefined,
+    random_map: [],
+    command_map: {},
+    tilemaps: [],
+    ui_click_regions: [],
+    ui_state: {
+        msgbox_up_visible: false,
+        msgbox_down_visible: false,
+        msgbox_index: 0,
+        msgbox_lines: []
+    },
+    wasm_promise: new Promise(load_resources)
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//                   H E L P E R    F U N C T I O N S                         //
+////////////////////////////////////////////////////////////////////////////////
+
+function globals() {
+    return window.cc3kdata
+}
+
 function load_image_from(name, url) {
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -17,8 +40,82 @@ function load_image_from(name, url) {
     })
 }
 
-function load_tilemaps() {
-    return Promise.all([
+function wrap(text) {
+    const line_limit = 33
+
+    /** @type{str[]} */
+    const words = text.split(' ')
+    const lines = []
+    var current_line = []
+    // Start with -1 because first word has no space
+    var line_length = -1
+    const add_word_to_line = (/** @type{str} */ word) => {
+        // +1 because we prepend a space before each word
+        const next_line_length = line_length + word.length + 1
+        // Check if adding this word will overflow
+        if(next_line_length > line_limit) {
+            lines.push(current_line)
+            current_line = []
+            line_length = -1
+            // If we're working on the top line of the next page,
+            // pop until the bottom line of the previous page < 30 chars
+            // so we can insert an ellipses (...) on that line.
+            if(lines.length % 2 == 0 && lines.length > 1) {
+                const last_Line = lines[lines.length-1]
+                while(true) {
+                    if(last_Line[last_Line.length-1][0] <= line_limit - 3)
+                        break
+                    add_word_to_line(last_Line.pop()[1])
+                }
+                const last_length = last_Line[last_Line.length-1][0]
+                last_Line.push([ last_length+2, '…' ])
+            }
+            // Add the current word to this new line
+            line_length += word.length + 1
+        } else {
+            line_length = next_line_length
+        }
+        current_line.push([ line_length, word ])
+    }
+    for(const word of words) add_word_to_line(word)
+    if(current_line.length > 0) lines.push(current_line)
+    let final_string = []
+    for(const line of lines) final_string.push(line.map(x => x[1]).join(' '))
+    return final_string
+}
+
+function get_render_context() {
+    const ctx = globals().cc3kctx
+    const [playerx, playery] = ctx.getRenderPlayerPos()
+    const [width, height] = ctx.getRenderDimensions()
+    const bg_buffer = ctx.getRenderBuffers(0)
+    const fg_buffer = ctx.getRenderBuffers(1)
+    const get_index = (buffer, x, y) => String.fromCharCode(buffer[x+y*width])
+    const in_bounds = (x, y) => x >= 0 && x < width && y >= 0 && y < height
+    const draw_tile = (canvas_ctx, tilemap, tx, ty, ox, oy, tile_size=16) => {
+        if(tilemap) {
+            canvas_ctx.drawImage(
+                tilemap,
+                tx*tile_size, ty*tile_size, tile_size, tile_size,
+                ox*16, oy*16, 16, 16
+            )
+        }
+    }
+    return [ctx, playerx, playery, width, height, bg_buffer, fg_buffer,
+        get_index, in_bounds, draw_tile]
+}
+
+function copySceneData(src, dst) {
+    src.copyWithin(dst, 0);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+//                   S C E N E    M A N A G E M E N T                         //
+////////////////////////////////////////////////////////////////////////////////
+
+async function load_resources(resolve, reject) {
+    // Load assets
+    const tilemaps = await Promise.all([
         load_image_from('tileset',  'assets/Dungeon_Tileset.png'),
         load_image_from('player',   'assets/Dungeon_Character.png'),
         load_image_from('dragon',   'assets/AdultRedDragonIdleSide.png'),
@@ -29,67 +126,35 @@ function load_tilemaps() {
         load_image_from('werewolf', 'assets/WerewolfStalkerIdleSide.png'),
         load_image_from('pheonix',  'assets/PoisonDrakeIdleSide.png'),
         load_image_from('arrows',   'assets/arrows.png'),
-        load_image_from('armour',   'assets/armour.png')
+        load_image_from('armour',   'assets/armour.png'),
+        load_image_from('loot',     'assets/Treasure+.png'),
+        load_image_from('loot_anim','assets/Shine_Sheet.png'),
     ])
-}
+    window.cc3kdata.tilemaps = Object.assign({}, ...tilemaps)
 
-function init_canvas() {
-    const ctx = window.cc3kctx
-    const [width, height] = ctx.getRenderDimensions()
-    window.random_map = []
-    for(let y = 0; y < height; y++) {
-        const row = []
-        for(let x = 0; x < width; x++) row.push(Math.random())
-        window.random_map.push(row)
+    // Setup canvas dimensions
+    const set_resolution = (id, resx, resy) => {
+        const canvas = document.getElementById(id)
+        canvas.width = (1 + 2 * canvas_width) * resx
+        canvas.height = (1 + 2 * canvas_height) * resy
     }
+    set_resolution('bg-canvas', 16, 16)
+    set_resolution('animation-canvas', 16, 16)
+    set_resolution('ui-canvas', 256, 256)
+    set_resolution('ui-overlay', 2, 2)
 
-    const canvas1 = document.getElementById('bg-canvas')
-    canvas1.width = (1 + 2 * canvas_width) * 16
-    canvas1.height = (1 + 2 * canvas_height) * 16
-    const canvas2 = document.getElementById('text-canvas')
-    canvas2.width = (1 + 2 * canvas_width) * 256
-    canvas2.height = (1 + 2 * canvas_height) * 256
-    const canvas3 = document.getElementById('animation-canvas')
-    canvas3.width = (1 + 2 * canvas_width) * 16
-    canvas3.height = (1 + 2 * canvas_height) * 16
-}
+    // Register UI click regions
+    globals().ui_click_regions.push([ 27, 27, 28, 28, ui_msgbox_down_click ])
+    globals().ui_click_regions.push([ 27, 25, 28, 26, ui_msgbox_up_click ])
 
-function start_game() {
-    const ctx = window.cc3kctx
-    ctx.loadScene(Module.PlayerRace.HUMAN)
-    ctx.render()
-}
-
-function generate_command_map() {
-    window.command_map = { }
-    // For move
-    directions = [ 'no', 'so', 'ea', 'we', 'ne', 'se', 'nw', 'sw' ]
-    direction_enum = [
-        Module.InputDirection.Dir_N,
-        Module.InputDirection.Dir_S,
-        Module.InputDirection.Dir_E,
-        Module.InputDirection.Dir_W,
-        Module.InputDirection.Dir_NE,
-        Module.InputDirection.Dir_SE,
-        Module.InputDirection.Dir_NW,
-        Module.InputDirection.Dir_SW
-    ]
-    action_enum = [
-        Module.InputAction.Action_Move,
-        Module.InputAction.Action_Attack,
-        Module.InputAction.Action_Use
-    ]
-    for(let i = 0; i < direction_enum.length; i++) {
-        window.command_map[`${directions[i]}`] = [ action_enum[0], direction_enum[i] ]
-        window.command_map[`a ${directions[i]}`] = [ action_enum[1], direction_enum[i] ]
-        window.command_map[`u ${directions[i]}`] = [ action_enum[2], direction_enum[i] ]
-    }
-    window.command_map[`r`] = [ action_enum[2], Module.InputDirection.Dir_None ]
+    // Done loading everything
+    resolve()
 }
 
 function setup_animations() {
     var last_time;
     var animation_status = {
+        // Monster idle animation
         'V': { 'frame': 0, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 400 },
         'W': { 'frame': 1, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 200 },
         'M': { 'frame': 2, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 400 },
@@ -97,6 +162,15 @@ function setup_animations() {
         'D': { 'frame': 0, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 200 },
         'T': { 'frame': 1, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 400 },
         'X': { 'frame': 2, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 200 },
+        // Loot shine animation
+        'G': { 'frame': 3, 'num_frames': 9, 'deltaT': 0, 'frame_duration': 100 },
+        '7': { 'frame': 9, 'num_frames': 9, 'deltaT': 0, 'frame_duration': 100 },
+        '8': { 'frame': 7, 'num_frames': 9, 'deltaT': 0, 'frame_duration': 100 },
+        '9': { 'frame': 2, 'num_frames': 9, 'deltaT': 0, 'frame_duration': 100 },
+        'C': { 'frame': 4, 'num_frames': 9, 'deltaT': 0, 'frame_duration': 100 },
+        'P': { 'frame': 0, 'num_frames': 9, 'deltaT': 0, 'frame_duration': 100 },
+        'B': { 'frame': 0, 'num_frames': 15, 'deltaT': 0, 'frame_duration': 100 },
+        // Staircase arrow animation
         'arrows': { 'frame': 0, 'num_frames': 4, 'deltaT': 0, 'frame_duration': 200 }
     }
     function step(timestamp) {
@@ -119,30 +193,80 @@ function setup_animations() {
     window.requestAnimationFrame(step)
 }
 
-function setup_render_context() {
-    const ctx = window.cc3kctx
-    const [playerx, playery] = ctx.getRenderPlayerPos()
+async function setup_everything() {
+    // Wait for resources to load
+    await globals().wasm_promise
+
+    // Init WASM context
+    window.cc3kdata.cc3kctx = new Module.WasmContext(0)
+
+    // Setup random numbers
+    const ctx = globals().cc3kctx
     const [width, height] = ctx.getRenderDimensions()
-    const bg_buffer = ctx.getRenderBuffers(0)
-    const fg_buffer = ctx.getRenderBuffers(1)
-    const get_index = (buffer, x, y) => String.fromCharCode(buffer[x+y*width])
-    const in_bounds = (x, y) => x >= 0 && x < width && y >= 0 && y < height
-    const draw_tile = (canvas_ctx, tilemap, tx, ty, ox, oy, tile_size=16) => {
-        if(tilemap) {
-            canvas_ctx.drawImage(
-                tilemap,
-                tx*tile_size, ty*tile_size, tile_size, tile_size,
-                ox*16, oy*16, 16, 16
-            )
-        }
+    window.cc3kdata.random_map = []
+    for(let y = 0; y < height; y++) {
+        const row = []
+        for(let x = 0; x < width; x++) row.push(Math.random())
+        globals().random_map.push(row)
     }
-    return [ctx, playerx, playery, width, height, bg_buffer, fg_buffer,
-        get_index, in_bounds, draw_tile]
+
+    // Generate command map
+    const command_map = globals().command_map
+    const directions = [ 'no', 'so', 'ea', 'we', 'ne', 'se', 'nw', 'sw' ]
+    const direction_enum = [
+        Module.InputDirection.Dir_N,
+        Module.InputDirection.Dir_S,
+        Module.InputDirection.Dir_E,
+        Module.InputDirection.Dir_W,
+        Module.InputDirection.Dir_NE,
+        Module.InputDirection.Dir_SE,
+        Module.InputDirection.Dir_NW,
+        Module.InputDirection.Dir_SW
+    ]
+    const action_enum = [
+        Module.InputAction.Action_Move,
+        Module.InputAction.Action_Attack,
+        Module.InputAction.Action_Use
+    ]
+    for(let i = 0; i < direction_enum.length; i++) {
+        command_map[`${directions[i]}`] = [ action_enum[0], direction_enum[i] ]
+        command_map[`a ${directions[i]}`] = [ action_enum[1], direction_enum[i] ]
+        command_map[`u ${directions[i]}`] = [ action_enum[2], direction_enum[i] ]
+    }
+    command_map[`r`] = [ action_enum[2], Module.InputDirection.Dir_None ]
+
+    // Start the main game
+    ctx.setRace(Module.PlayerRace.HUMAN)
+    // const map = [
+    //     '                      ',
+    //     ' |------------------| ',
+    //     ' |.....D9....1......| ',
+    //     ' |.@.............C.\\| ',
+    //     ' |..6.M...7..DB.....| ',
+    //     ' |------------------| ',
+    //     '                      ',
+    // ]
+    // console.log(width*height)
+    // for(let y = 0; y < map.length; y++) {
+    //     for(let x = 0; x < map[y].length; x++) {
+    //         ctx.setSceneMap(x, y, map[y].charCodeAt(x))
+    //     }
+    // }
+    // ctx.buildScene(1, -1, false)
+    ctx.buildRandomScene()
+    ctx.switchScene(1)
+    ctx.render()
+    render_to_canvas()
+    setup_animations()
 }
+
+////////////////////////////////////////////////////////////////////////////////
+//                          R E N D E R I N G                                 //
+////////////////////////////////////////////////////////////////////////////////
 
 function render_animations(animation_status) {
     const [ctx, playerx, playery, width, height, bg_buffer, fg_buffer,
-        get_index, in_bounds, draw_tile] = setup_render_context()
+        get_index, in_bounds, draw_tile] = get_render_context()
     const canvas = document.getElementById('animation-canvas')
     const canvas_ctx = canvas.getContext('2d')
     canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -154,16 +278,23 @@ function render_animations(animation_status) {
             const fg_char = get_index(fg_buffer, x, y)
             const bg_char = get_index(bg_buffer, x, y)
             let tx, ty, tilemap
-            if(fg_char == 'V') [tx, ty, tilemap] = [animation_status['V']['frame'], 0, window.tilemaps['vampire']]
-            else if(fg_char == 'W') [tx, ty, tilemap] = [animation_status['W']['frame'], 0, window.tilemaps['werewolf']]
-            else if(fg_char == 'M') [tx, ty, tilemap] = [animation_status['M']['frame'], 0, window.tilemaps['merchant']]
-            else if(fg_char == 'N') [tx, ty, tilemap] = [animation_status['N']['frame'], 0, window.tilemaps['goblin']]
-            else if(fg_char == 'D') [tx, ty, tilemap] = [animation_status['D']['frame'], 0, window.tilemaps['dragon']]
-            else if(fg_char == 'T') [tx, ty, tilemap] = [animation_status['T']['frame'], 0, window.tilemaps['troll']]
-            else if(fg_char == 'X') [tx, ty, tilemap] = [animation_status['X']['frame'], 0, window.tilemaps['pheonix']]
+            if(fg_char == 'V') [tx, ty, tilemap] = [animation_status['V']['frame'], 0, globals().tilemaps['vampire']]
+            else if(fg_char == 'W') [tx, ty, tilemap] = [animation_status['W']['frame'], 0, globals().tilemaps['werewolf']]
+            else if(fg_char == 'M') [tx, ty, tilemap] = [animation_status['M']['frame'], 0, globals().tilemaps['merchant']]
+            else if(fg_char == 'N') [tx, ty, tilemap] = [animation_status['N']['frame'], 0, globals().tilemaps['goblin']]
+            else if(fg_char == 'D') [tx, ty, tilemap] = [animation_status['D']['frame'], 0, globals().tilemaps['dragon']]
+            else if(fg_char == 'T') [tx, ty, tilemap] = [animation_status['T']['frame'], 0, globals().tilemaps['troll']]
+            else if(fg_char == 'X') [tx, ty, tilemap] = [animation_status['X']['frame'], 0, globals().tilemaps['pheonix']]
+            else if(fg_char == 'G') [tx, ty, tilemap] = [animation_status['G']['frame'], 10, globals().tilemaps['loot_anim']]
+            else if(fg_char == '7') [tx, ty, tilemap] = [animation_status['7']['frame'], 6, globals().tilemaps['loot_anim']]
+            else if(fg_char == '8') [tx, ty, tilemap] = [animation_status['8']['frame'], 3, globals().tilemaps['loot_anim']]
+            else if(fg_char == '9') [tx, ty, tilemap] = [animation_status['9']['frame'], 9, globals().tilemaps['loot_anim']]
+            else if(fg_char == 'C') [tx, ty, tilemap] = [animation_status['C']['frame'], 7, globals().tilemaps['loot_anim']]
+            else if(fg_char == 'P') [tx, ty, tilemap] = [animation_status['P']['frame'], 1, globals().tilemaps['loot_anim']]
+            else if(fg_char == 'B') [tx, ty, tilemap] = [animation_status['B']['frame'], 11, globals().tilemaps['loot_anim']]
             draw_tile(canvas_ctx, tilemap, tx, ty, ox, oy)
             if(bg_char == '\\') {
-                draw_tile(canvas_ctx, window.tilemaps['arrows'],
+                draw_tile(canvas_ctx, globals().tilemaps['arrows'],
                     animation_status['arrows']['frame'], 0, ox, oy-1)
             }
         }
@@ -171,9 +302,9 @@ function render_animations(animation_status) {
 }
 
 function render_text() {
-    const ctx = window.cc3kctx
+    const ctx = globals().cc3kctx
     const stats = ctx.getRenderGameStats()
-    const canvas = document.getElementById('text-canvas')
+    const canvas = document.getElementById('ui-canvas')
     const canvas_ctx = canvas.getContext('2d')
 
     // Draw stats
@@ -181,25 +312,34 @@ function render_text() {
     canvas_ctx.font = '256px monogram'
     canvas_ctx.fillStyle = 'white'
     canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
-    canvas_ctx.fillText(`Hp   ${stats.m_hp}`, 128, 256*1)
-    canvas_ctx.fillText(`Atk  ${stats.m_atk}`, 128, 256*2)
-    canvas_ctx.fillText(`Def  ${stats.m_def}`, 128, 256*3)
-    canvas_ctx.fillText(`Gold ${stats.m_gold}`, 128, 256*4)
+    canvas_ctx.fillText(`Race ${stats.m_race}`, 128, 256*1)
+    canvas_ctx.fillText(`Hp   ${stats.m_hp}`,   128, 256*2)
+    canvas_ctx.fillText(`Atk  ${stats.m_atk}`,  128, 256*3)
+    canvas_ctx.fillText(`Def  ${stats.m_def}`,  128, 256*4)
+    canvas_ctx.fillText(`Gold ${stats.m_gold}`, 128, 256*5)
 
+    // Setup msgbox state
+    const lines = wrap(globals().cc3kctx.getMessageLog() || '').filter(x => x)
+    globals().ui_state.msgbox_up_visible = false
+    globals().ui_state.msgbox_down_visible = lines.length > 2
+    globals().ui_state.msgbox_index = 0
+    globals().ui_state.msgbox_lines = lines
+    render_msgbox()
+}
+
+function render_msgbox() {
+    const ctx = globals().cc3kctx
+    const canvas = document.getElementById('ui-canvas')
+    const canvas_ctx = canvas.getContext('2d')
     // Draw message box box
     const rect_x = 128
     const rect_y = (2*canvas_height-1.5)*256
     const offset1 = -32
     const offset2 = 32
-
-    // TODO: Fix this and enable multi-line messages properly
-    const the_message = window.cc3kctx.getMessageLog()
-    const line_1_limit = 33
-    const line_2_limit = 30
-    let line1 = the_message.substring(0, 33)
-    let line2 = the_message.substring(33, 63)
-
-    if(the_message) {
+    const ui_state = globals().ui_state
+    if(ui_state.msgbox_lines.length > 0) {
+        const line1 = ui_state.msgbox_lines[2*ui_state.msgbox_index] || ''
+        const line2 = ui_state.msgbox_lines[2*ui_state.msgbox_index+1] || ''
         canvas_ctx.beginPath();
         canvas_ctx.lineWidth = '4';
         canvas_ctx.strokeStyle = 'white'
@@ -217,15 +357,21 @@ function render_text() {
         canvas_ctx.fill();
 
         canvas_ctx.fillStyle = 'white'
+        canvas_ctx.font = '256px monogram'
         canvas_ctx.fillText(` ${line1}`, rect_x, rect_y + 1.85 * 128)
         canvas_ctx.fillText(` ${line2}`, rect_x, rect_y + 2.85 * 128 + 32)
+        // canvas_ctx.fillText(` 012345678901234567890123456789012`, rect_x, rect_y + 1.85 * 128)
+        // canvas_ctx.fillText(` 012345678901234567890123456789012`, rect_x, rect_y + 2.85 * 128 + 32)
+        if(ui_state.msgbox_up_visible)
+        canvas_ctx.fillText('\u2191', rect_x + 1.9*canvas_width*256, rect_y + 0.7*256)
+        if(ui_state.msgbox_down_visible)
         canvas_ctx.fillText('\u2193', rect_x + 1.9*canvas_width*256, rect_y + 1.6*256)
     }
 }
 
 function render_to_canvas() {
     const [ctx, playerx, playery, width, height, bg_buffer, fg_buffer,
-        get_index, in_bounds, draw_tile] = setup_render_context()
+        get_index, in_bounds, draw_tile] = get_render_context()
     function surrounded_by(x, y, chars = [' ', '#']) {
         if(x == 0 || y == 0 || x == width-1 || y == height-1)
             return '00000000'
@@ -238,12 +384,13 @@ function render_to_canvas() {
     }
     const canvas = document.getElementById('bg-canvas')
     const canvas_ctx = canvas.getContext('2d')
+    // const player_in_tunnel = get_index(bg_buffer, playerx, playery) === '#'
     canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
     for(let oy = 0; oy <= 2*canvas_height; oy++) {
         for(let ox = 0; ox <= 2*canvas_width; ox++) {
             // Draw base color
             let [tx, ty] = [8, 7]
-            draw_tile(canvas_ctx, window.tilemaps['tileset'], tx, ty, ox, oy)
+            draw_tile(canvas_ctx, globals().tilemaps['tileset'], tx, ty, ox, oy)
 
             // Draw walls/floor
             const [x, y] = [ playerx+ox-canvas_width, playery+oy-canvas_height ]
@@ -277,7 +424,7 @@ function render_to_canvas() {
                 '01101011': [ 8, 4 ],
                 '11010110': [ 7, 4 ],
             }
-            const rand = window.random_map[y][x]
+            const rand = globals().random_map[y][x]
             const s_code = surrounded_by(x, y)
             if(bg_char == '|') {
                 [tx, ty] = wall_map_v[s_code] || [ 0, 1 ]
@@ -302,32 +449,40 @@ function render_to_canvas() {
             } else if(bg_char == '\\') {
                 [tx, ty] = [9, 3]
             }
-            draw_tile(canvas_ctx, window.tilemaps['tileset'], tx, ty, ox, oy)
+            draw_tile(canvas_ctx, globals().tilemaps['tileset'], tx, ty, ox, oy)
 
             // Draw entities
-            let tilemap = window.tilemaps['tileset']
+            let tilemap
+            let size = 16
             if(fg_char == '\x00') continue
-            if(fg_char == 'G') [tx, ty] = [6, 8]
-            else if(fg_char == 'P') [tx, ty] = [9, 8]
-            else if(fg_char == 'C') [tx, ty] = [9, 9]
-            if(fg_char == 'B')
-                draw_tile(canvas_ctx, window.tilemaps['armour'], 1, 0, ox, oy, 32)
-            else draw_tile(canvas_ctx, tilemap, tx, ty, ox, oy)
+            if(fg_char == 'G')      [tx, ty, tilemap] = [Math.floor(4*rand+1), 0, globals().tilemaps['loot']]
+            else if(fg_char == '7') [tx, ty, tilemap] = [Math.floor(4*rand+6), 0, globals().tilemaps['loot']]
+            else if(fg_char == '8') [tx, ty, tilemap] = [7, 8, globals().tilemaps['loot']]
+            else if(fg_char == '9') [tx, ty, tilemap] = [2, 9, globals().tilemaps['loot']]
+            else if(fg_char == 'P') [tx, ty, tilemap] = [8, 9, globals().tilemaps['tileset']]
+            else if(fg_char == 'C') [tx, ty, tilemap] = [9, 9, globals().tilemaps['tileset']]
+            else if(fg_char == 'C') [tx, ty, tilemap] = [9, 9, globals().tilemaps['tileset']]
+            else if(fg_char == 'B') [tx, ty, tilemap, size] = [1, 0, globals().tilemaps['armour'], 32]
+            draw_tile(canvas_ctx, tilemap, tx, ty, ox, oy, size)
         }
     }
     // Draw player
-    draw_tile(canvas_ctx, window.tilemaps['player'], 6, 2, canvas_width, canvas_height)
+    draw_tile(canvas_ctx, globals().tilemaps['player'], 6, 2, canvas_width, canvas_height)
     // Render UI elements
     render_text()
 }
 
+////////////////////////////////////////////////////////////////////////////////
+//                          U I    E V E N T S                                //
+////////////////////////////////////////////////////////////////////////////////
+
 function input_submit() {
     const textbox = document.getElementById('game-input')
-    const action = window.command_map[textbox.value]
+    const action = globals().command_map[textbox.value]
     if(action) {
         textbox.value = ''
-        window.cc3kctx.update(...action)
-        window.cc3kctx.render()
+        globals().cc3kctx.update(...action)
+        globals().cc3kctx.render()
         render_to_canvas()
     } else {
         textbox.classList.add('input-error')
@@ -337,4 +492,62 @@ function input_submit() {
 function input_keypress() {
     const textbox = document.getElementById('game-input')
     textbox.classList.remove('input-error')
+}
+
+function ui_msgbox_down_click() {
+    if(!globals().ui_state.msgbox_down_visible)
+        return
+    const next_index = globals().ui_state.msgbox_index+1
+    if(next_index < globals().ui_state.msgbox_lines.length/2)
+        globals().ui_state.msgbox_index = next_index
+    if(next_index+1 >= globals().ui_state.msgbox_lines.length/2) {
+        globals().ui_state.msgbox_down_visible = false
+        globals().ui_state.msgbox_up_visible = true
+    }
+    render_msgbox()
+}
+
+function ui_msgbox_up_click() {
+    if(!globals().ui_state.msgbox_up_visible)
+        return
+    const next_index = globals().ui_state.msgbox_index-1
+    if(next_index >= 0)
+        globals().ui_state.msgbox_index = next_index
+    if(next_index-1 <= 0) {
+        globals().ui_state.msgbox_down_visible = true
+        globals().ui_state.msgbox_up_visible = false
+    }
+    render_msgbox()
+}
+
+function render_ui_overlay() {
+    const str2col = function(str) {
+        var hash = 0;
+        for (var i = 0; i < str.length; i++)
+            hash = str.charCodeAt(i) + ((hash << 5) - hash);
+        var colour = '#';
+        for (var i = 0; i < 3; i++) {
+            var value = (hash >> (i * 8)) & 0xFF;
+            colour += ('00' + value.toString(16)).slice(-2);
+        }
+        return colour;
+    }
+    const canvas = document.getElementById('ui-overlay')
+    const canvas_ctx = canvas.getContext('2d')
+    for(const x of globals().ui_click_regions) {
+        canvas_ctx.beginPath();
+        canvas_ctx.fillStyle = str2col(String(x[4]))
+        canvas_ctx.rect(x[0], x[1], x[2]-x[0]+1, x[3]-x[1]+1)
+        canvas_ctx.fill();
+    }
+}
+
+function ui_click(event) {
+    const height = (2*canvas_width+1) * 2
+    const width = (2*canvas_height+1) * 2
+    const canvas = document.getElementById('ui-overlay')
+    const rect = canvas.getBoundingClientRect()
+    const x = Math.floor((event.clientX - rect.left) / rect.width * width)
+    const y = Math.floor((event.clientY - rect.top) / rect.height * height)
+    globals().ui_click_regions.filter(bb => bb[0] <= x && x <= bb[2] && bb[1] <= y && y <= bb[3]).map(bb => bb[4]())
 }

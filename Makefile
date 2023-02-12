@@ -28,12 +28,12 @@ SOURCES = \
 
 OPTIONS = \
 	-lembind \
+	-Icc3k/src \
+	-std=c++14 \
+	-Wno-unqualified-std-cast-call \
 	-Os \
 	--closure 1 \
 	-flto \
-	-Icc3k/src \
-	-std=c++14 \
-	-Wno-unqualified-std-cast-call
 
 cc3k.js cc3k.wasm: ${SOURCES}
 	emcc ${OPTIONS} ${SOURCES} -o cc3k.js
@@ -48,7 +48,7 @@ itchio.zip: cc3k.js cc3k.wasm
 
 .PHONY: clean
 clean:
-	rm cc3k.wasm cc3k.js itchio.zip
+	rm -f cc3k.wasm cc3k.js itchio.zip
 	rm -rf itchio
 
 .PHONY: all
