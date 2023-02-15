@@ -1,8 +1,6 @@
 // TODO:
-// - Game start and game over message
 // - Help screen/credits
 // - Better input/autocomplete/english (i.e., "move north" instead of "no")
-// - Complete message rendering system
 
 const canvas_width = 7
 const canvas_height = 7
@@ -17,8 +15,10 @@ window.cc3kdata = {
         msgbox_up_visible: false,
         msgbox_down_visible: false,
         msgbox_index: 0,
-        msgbox_lines: []
+        msgbox_lines: [],
+        scene_state: undefined // INTRO, MAIN, DIED, WIN
     },
+    race_map: { },
     wasm_promise: new Promise(load_resources)
 }
 
@@ -197,19 +197,6 @@ async function setup_everything() {
     // Wait for resources to load
     await globals().wasm_promise
 
-    // Init WASM context
-    window.cc3kdata.cc3kctx = new Module.WasmContext(0)
-
-    // Setup random numbers
-    const ctx = globals().cc3kctx
-    const [width, height] = ctx.getRenderDimensions()
-    window.cc3kdata.random_map = []
-    for(let y = 0; y < height; y++) {
-        const row = []
-        for(let x = 0; x < width; x++) row.push(Math.random())
-        globals().random_map.push(row)
-    }
-
     // Generate command map
     const command_map = globals().command_map
     const directions = [ 'no', 'so', 'ea', 'we', 'ne', 'se', 'nw', 'sw' ]
@@ -226,38 +213,70 @@ async function setup_everything() {
     const action_enum = [
         Module.InputAction.Action_Move,
         Module.InputAction.Action_Attack,
-        Module.InputAction.Action_Use
+        Module.InputAction.Action_Use,
+        Module.InputAction.Action_Restart
     ]
     for(let i = 0; i < direction_enum.length; i++) {
         command_map[`${directions[i]}`] = [ action_enum[0], direction_enum[i] ]
         command_map[`a ${directions[i]}`] = [ action_enum[1], direction_enum[i] ]
         command_map[`u ${directions[i]}`] = [ action_enum[2], direction_enum[i] ]
     }
-    command_map[`r`] = [ action_enum[2], Module.InputDirection.Dir_None ]
+    command_map[`r`] = [ action_enum[3], Module.InputDirection.Dir_None ]
 
-    // Start the main game
-    ctx.setRace(Module.PlayerRace.HUMAN)
-    // const map = [
-    //     '                      ',
-    //     ' |------------------| ',
-    //     ' |.....D9....1......| ',
-    //     ' |.@.............C.\\| ',
-    //     ' |..6.M...7..DB.....| ',
-    //     ' |------------------| ',
-    //     '                      ',
-    // ]
-    // console.log(width*height)
-    // for(let y = 0; y < map.length; y++) {
-    //     for(let x = 0; x < map[y].length; x++) {
-    //         ctx.setSceneMap(x, y, map[y].charCodeAt(x))
-    //     }
-    // }
-    // ctx.buildScene(1, -1, false)
-    ctx.buildRandomScene()
-    ctx.switchScene(1)
-    ctx.render()
-    render_to_canvas()
+    // Setup race map
+    globals().race_map['h'] = Module.PlayerRace.HUMAN
+    globals().race_map['d'] = Module.PlayerRace.DWARF
+    globals().race_map['o'] = Module.PlayerRace.ORC
+    globals().race_map['e'] = Module.PlayerRace.ELF
+
+    // Render
+    switch_scene('INTRO')
     setup_animations()
+    render()
+}
+
+function switch_scene(scene) {
+    globals().ui_state.scene_state = scene
+    if(scene == 'INTRO') {
+        // Init WASM context
+        window.cc3kdata.cc3kctx = new Module.WasmContext(0)
+
+        // Setup random numbers
+        const [width, height] = globals().cc3kctx.getRenderDimensions()
+        window.cc3kdata.random_map = []
+        for(let y = 0; y < height; y++) {
+            const row = []
+            for(let x = 0; x < width; x++) row.push(Math.random())
+            globals().random_map.push(row)
+        }
+    } else if(scene == 'MAIN') {
+        const ctx = globals().cc3kctx
+        // Start the main game
+        // const map = [
+        //     '                      ',
+        //     ' |------------------| ',
+        //     ' |.....D9....1......| ',
+        //     ' |.@.............C.\\| ',
+        //     ' |..6.M...7..DB.....| ',
+        //     ' |------------------| ',
+        //     '                      ',
+        // ]
+        // console.log(width*height)
+        // for(let y = 0; y < map.length; y++) {
+        //     for(let x = 0; x < map[y].length; x++) {
+        //         ctx.setSceneMap(x, y, map[y].charCodeAt(x))
+        //     }
+        // }
+        // ctx.buildScene(1, -1, false)
+        ctx.buildRandomScene()
+        ctx.switchScene(1)
+        ctx.render()
+    }
+    for(let canvas_id of ['ui-canvas','bg-canvas','animation-canvas','ui-overlay']) {
+        const canvas = document.getElementById(canvas_id)
+        const canvas_ctx = canvas.getContext('2d')
+        canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -265,6 +284,7 @@ async function setup_everything() {
 ////////////////////////////////////////////////////////////////////////////////
 
 function render_animations(animation_status) {
+    if(globals().ui_state.scene_state != 'MAIN') return
     const [ctx, playerx, playery, width, height, bg_buffer, fg_buffer,
         get_index, in_bounds, draw_tile] = get_render_context()
     const canvas = document.getElementById('animation-canvas')
@@ -302,6 +322,7 @@ function render_animations(animation_status) {
 }
 
 function render_text() {
+    if(globals().ui_state.scene_state != 'MAIN') return
     const ctx = globals().cc3kctx
     const stats = ctx.getRenderGameStats()
     const canvas = document.getElementById('ui-canvas')
@@ -328,6 +349,7 @@ function render_text() {
 }
 
 function render_msgbox() {
+    if(globals().ui_state.scene_state != 'MAIN') return
     const ctx = globals().cc3kctx
     const canvas = document.getElementById('ui-canvas')
     const canvas_ctx = canvas.getContext('2d')
@@ -369,7 +391,8 @@ function render_msgbox() {
     }
 }
 
-function render_to_canvas() {
+function render_scene_main() {
+    if(globals().ui_state.scene_state != 'MAIN') return
     const [ctx, playerx, playery, width, height, bg_buffer, fg_buffer,
         get_index, in_bounds, draw_tile] = get_render_context()
     function surrounded_by(x, y, chars = [' ', '#']) {
@@ -472,18 +495,86 @@ function render_to_canvas() {
     render_text()
 }
 
+function render_scene_intro() {
+    if(globals().ui_state.scene_state != 'INTRO') return
+    const canvas = document.getElementById('ui-canvas')
+    const canvas_ctx = canvas.getContext('2d')
+    canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    canvas_ctx.font = '256px monogram'
+    canvas_ctx.fillStyle = 'white'
+    canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    canvas_ctx.fillText(`ChamberCrawler 3000+`, 256*(3.6), 256*(1.5))
+    canvas_ctx.fillText(`Select a race:`, 256*(1.50), 256*(canvas_height-1))
+    canvas_ctx.fillText(`h - Human`,      256*(1.50), 256*(canvas_height-1+1))
+    canvas_ctx.fillText(`d - Dwarf`,      256*(1.50), 256*(canvas_height-1+1.7))
+    canvas_ctx.fillText(`o - Orc  `,      256*(1.50), 256*(canvas_height-1+2.3))
+    canvas_ctx.fillText(`e - Elf  `,      256*(1.50), 256*(canvas_height-1+3))
+    canvas_ctx.fillText(`(c) 2023 Kevin Dai`, 256*(3.8), 256*(canvas_height*2))
+}
+
+function render_scene_died() {
+    if(globals().ui_state.scene_state != 'DIED') return
+    const ctx = globals().cc3kctx
+    const canvas = document.getElementById('ui-canvas')
+    const canvas_ctx = canvas.getContext('2d')
+    canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    canvas_ctx.font = '256px monogram'
+    canvas_ctx.fillStyle = 'white'
+    canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    canvas_ctx.fillText(`You died.`, 256*(1.50), 256*canvas_height)
+    canvas_ctx.fillText(`Score: ${ctx?.getGameState().m_finalScore || 0}`,  256*(1.50), 256*(canvas_height+1))
+    canvas_ctx.fillText(`Type [r] to restart.`,  256*(1.50), 256*(canvas_height+2))
+}
+
+function render_scene_win() {
+    if(globals().ui_state.scene_state != 'WIN') return
+    const ctx = globals().cc3kctx
+    const canvas = document.getElementById('ui-canvas')
+    const canvas_ctx = canvas.getContext('2d')
+    canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    canvas_ctx.font = '256px monogram'
+    canvas_ctx.fillStyle = 'white'
+    canvas_ctx.clearRect(0, 0, canvas.width, canvas.height)
+    canvas_ctx.fillText(`End of game! ^w^`, 256*(1.50), 256*canvas_height)
+    canvas_ctx.fillText(`Score: 100`,  256*(1.50), 256*(canvas_height+1))
+    canvas_ctx.fillText(`Type [r] to restart.`,  256*(1.50), 256*(canvas_height+2))
+}
+
+const render = () => { for(const f of [
+    render_scene_main,
+    render_scene_intro,
+    render_scene_died,
+    render_scene_win
+]) f() }
+
 ////////////////////////////////////////////////////////////////////////////////
 //                          U I    E V E N T S                                //
 ////////////////////////////////////////////////////////////////////////////////
 
 function input_submit() {
     const textbox = document.getElementById('game-input')
-    const action = globals().command_map[textbox.value]
-    if(action) {
+    const action = globals().command_map[textbox.value.toLowerCase()]
+    const race = globals().race_map[textbox.value.toLowerCase()]
+    const isIntro = globals().ui_state.scene_state == 'INTRO';
+    const ctx = globals().cc3kctx;
+    if(isIntro && race) {
         textbox.value = ''
-        globals().cc3kctx.update(...action)
-        globals().cc3kctx.render()
-        render_to_canvas()
+        ctx.setRace(race)
+        switch_scene('MAIN')
+        render()
+    } else if(!isIntro && action) {
+        textbox.value = ''
+        if(action[0] == Module.InputAction.Action_Restart) {
+            switch_scene('INTRO')
+        } else {
+            ctx.update(...action)
+            ctx.render()
+            if(ctx.getGameState().m_playerDead)
+                switch_scene('DIED')
+            else if(ctx.getGameState().m_gameFinished)
+                switch_scene('WIN')
+        }
+        render()
     } else {
         textbox.classList.add('input-error')
     }
